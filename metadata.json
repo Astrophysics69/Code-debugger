@@ -1,0 +1,6 @@
+{
+  "name": "DebugAI: Python 3 & Multi-Lang Debugger",
+  "description": "A specialized AI assistant that debugs and executes code snippets in Python 3, JavaScript, TypeScript, and more.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
