@@ -26,6 +26,22 @@ RULES:
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Simple in-memory cache to save quota
+const analysisCache = new Map<string, { result: string; timestamp: number }>();
+const CACHE_TTL = 1000 * 60 * 10; // 10 minutes
+
+function getCachedResult(code: string): string | null {
+  const cached = analysisCache.get(code);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.result;
+  }
+  return null;
+}
+
+function setCachedResult(code: string, result: string) {
+  analysisCache.set(code, { result, timestamp: Date.now() });
+}
+
 function handleGenAIError(error: any): never {
   console.error("Gemini API Error:", error);
   
@@ -48,7 +64,10 @@ function handleGenAIError(error: any): never {
   throw error;
 }
 
-export async function debugCode(code: string, retryCount = 0): Promise<string> {
+export async function debugCode(code: string, history?: string[], retryCount = 0): Promise<string> {
+  const cached = getCachedResult(code);
+  if (cached && retryCount === 0) return cached;
+
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("API_KEY_MISSING");
@@ -56,20 +75,24 @@ export async function debugCode(code: string, retryCount = 0): Promise<string> {
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout
+  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s timeout
   
+  const historyContext = history && history.length > 0 
+    ? `\n\nPREVIOUSLY SOLVED PROBLEMS (LEARNING CONTEXT):\n${history.join('\n---\n')}\nUse these to identify recurring patterns or user coding style.`
+    : '';
+
   try {
     const response = await Promise.race([
       ai.models.generateContent({
         model: "gemini-3.1-pro-preview",
-        contents: code,
+        contents: historyContext ? `${historyContext}\n\nCURRENT CODE TO ANALYZE:\n${code}` : code,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
           temperature: 0.1,
           thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 45000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 120000))
     ]);
 
     clearTimeout(timeoutId);
@@ -77,46 +100,52 @@ export async function debugCode(code: string, retryCount = 0): Promise<string> {
       throw new Error("EMPTY_RESPONSE");
     }
 
+    setCachedResult(code, response.text);
     return response.text;
   } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
+    if (error.name === 'AbortError' || error.message === 'AbortError') {
       throw new Error("TIMEOUT_ERROR");
     }
     const errorString = JSON.stringify(error).toLowerCase();
     const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
 
-    // Auto-retry once for quota errors after a short delay
-    if (isQuotaError && retryCount < 1) {
-      console.log("Quota exceeded, retrying in 3 seconds...");
-      await sleep(3000);
-      return debugCode(code, retryCount + 1);
+    // Exponential backoff retry
+    if (isQuotaError && retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 3000;
+      console.log(`Quota exceeded, retrying in ${delay/1000} seconds...`);
+      await sleep(delay);
+      return debugCode(code, history, retryCount + 1);
     }
 
     return handleGenAIError(error);
   }
 }
 
-export async function* debugCodeStream(code: string, retryCount = 0): AsyncGenerator<string> {
+export async function* debugCodeStream(code: string, isTurbo = false, history?: string[], retryCount = 0): AsyncGenerator<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("API_KEY_MISSING");
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for stream
+  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s for stream
   
+  const historyContext = history && history.length > 0 
+    ? `\n\nPREVIOUSLY SOLVED PROBLEMS (LEARNING CONTEXT):\n${history.join('\n---\n')}\nUse these to identify recurring patterns or user coding style.`
+    : '';
+
   try {
     const response = await Promise.race([
       ai.models.generateContentStream({
-        model: "gemini-3.1-pro-preview",
-        contents: code,
+        model: isTurbo ? "gemini-3.1-flash-lite-preview" : "gemini-3-flash-preview",
+        contents: historyContext ? `${historyContext}\n\nCURRENT CODE TO ANALYZE:\n${code}` : code,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
           temperature: 0.1,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM }
+          thinkingConfig: isTurbo ? { thinkingLevel: ThinkingLevel.MINIMAL } : { thinkingLevel: ThinkingLevel.LOW }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 60000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 120000))
     ]);
 
     for await (const chunk of response) {
@@ -125,16 +154,17 @@ export async function* debugCodeStream(code: string, retryCount = 0): AsyncGener
     clearTimeout(timeoutId);
   } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
+    if (error.name === 'AbortError' || error.message === 'AbortError') {
       throw new Error("TIMEOUT_ERROR");
     }
     const errorString = JSON.stringify(error).toLowerCase();
     const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
 
-    if (isQuotaError && retryCount < 1) {
-      console.log("Quota exceeded in stream, retrying in 3 seconds...");
-      await sleep(3000);
-      yield* debugCodeStream(code, retryCount + 1);
+    if (isQuotaError && retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 3000;
+      console.log(`Quota exceeded in stream, retrying in ${delay/1000} seconds...`);
+      await sleep(delay);
+      yield* debugCodeStream(code, isTurbo, history, retryCount + 1);
       return;
     }
 
@@ -142,80 +172,18 @@ export async function* debugCodeStream(code: string, retryCount = 0): AsyncGener
   }
 }
 
-export async function* refactorCodeStream(code: string, retryCount = 0): AsyncGenerator<string> {
+export async function quickAnalysis(code: string, retryCount = 0): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("API_KEY_MISSING");
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-  
-  const REFACTOR_INSTRUCTION = `
-You are an expert software architect. Your goal is to suggest refactoring improvements for the provided code.
-Focus on:
-1. Performance optimizations.
-2. Code simplification and readability.
-3. Best practices and design patterns.
-4. Reducing complexity.
-
-Format your response using Markdown with the following sections:
-- ### 🚀 Refactoring Suggestions
-  (Bullet points of specific improvements)
-- ### ✨ Refactored Code
-  (Provide the improved code block with appropriate language highlighting)
-- ### 🧠 Rationale
-  (Explain why these changes improve the code)
-`;
-
-  try {
-    const response = await Promise.race([
-      ai.models.generateContentStream({
-        model: "gemini-3.1-pro-preview",
-        contents: code,
-        config: {
-          systemInstruction: REFACTOR_INSTRUCTION,
-          temperature: 0.2,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM }
-        },
-      }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 60000))
-    ]);
-
-    for await (const chunk of response) {
-      yield chunk.text;
-    }
-    clearTimeout(timeoutId);
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      throw new Error("TIMEOUT_ERROR");
-    }
-    const errorString = JSON.stringify(error).toLowerCase();
-    const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
-
-    if (isQuotaError && retryCount < 1) {
-      console.log("Quota exceeded in refactor stream, retrying in 3 seconds...");
-      await sleep(3000);
-      yield* refactorCodeStream(code, retryCount + 1);
-      return;
-    }
-
-    return handleGenAIError(error);
-  }
-}
-
-export async function quickAnalysis(code: string): Promise<string> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("API_KEY_MISSING");
-
-  const ai = new GoogleGenAI({ apiKey });
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s for quick analysis
+  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s for quick analysis
   
   try {
     const response = await Promise.race([
       ai.models.generateContent({
-        model: "gemini-3.1-flash-lite-preview",
+        model: "gemini-3-flash-preview",
         contents: code,
         config: {
           systemInstruction: "You are a high-speed debugging engine. Provide a lightning-fast, precise summary of bugs and the fix. Be extremely concise. Use bullet points.",
@@ -223,21 +191,30 @@ export async function quickAnalysis(code: string): Promise<string> {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 15000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 30000))
     ]);
 
     clearTimeout(timeoutId);
     return response.text || "No issues found.";
   } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
+    if (error.name === 'AbortError' || error.message === 'AbortError') {
       throw new Error("TIMEOUT_ERROR");
+    }
+    const errorString = JSON.stringify(error).toLowerCase();
+    const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
+
+    if (isQuotaError && retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 3000;
+      console.log(`Quota exceeded in quick analysis, retrying in ${delay/1000} seconds...`);
+      await sleep(3000);
+      return quickAnalysis(code, retryCount + 1);
     }
     return handleGenAIError(error);
   }
 }
 
-export async function simulateExecution(code: string, language: string, variables?: Record<string, any>, stdin?: string): Promise<string> {
+export async function simulateExecution(code: string, language: string, variables?: Record<string, any>, stdin?: string, retryCount = 0): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("API_KEY_MISSING");
@@ -245,7 +222,7 @@ export async function simulateExecution(code: string, language: string, variable
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s for simulation
+  const timeoutId = setTimeout(() => controller.abort(), 150000); // 150s for simulation
   
   const variablesContext = variables && Object.keys(variables).length > 0 
     ? `\n\nCONTEXT VARIABLES:\n${Object.entries(variables).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join('\n')}`
@@ -274,18 +251,27 @@ export async function simulateExecution(code: string, language: string, variable
       ${code}`,
         config: {
           temperature: 0.1,
-          thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 45000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 150000))
     ]);
 
     clearTimeout(timeoutId);
     return response.text || "No output produced.";
   } catch (error: any) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      return "Error: AI Simulation timed out (45s). The code might be too complex or the service is slow.";
+    if (error.name === 'AbortError' || error.message === 'AbortError') {
+      return "Error: AI Simulation timed out (150s). The code might be too complex or the service is slow.";
+    }
+    const errorString = JSON.stringify(error).toLowerCase();
+    const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
+
+    if (isQuotaError && retryCount < 3) {
+      const delay = Math.pow(2, retryCount) * 3000;
+      console.log(`Quota exceeded in simulation, retrying in ${delay/1000} seconds...`);
+      await sleep(delay);
+      return simulateExecution(code, language, variables, stdin, retryCount + 1);
     }
     // Re-throw so App.tsx can handle categorization and cooldowns
     return handleGenAIError(error);

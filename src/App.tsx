@@ -18,7 +18,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { transform } from "sucrase";
 import hljs from 'highlight.js';
-import { debugCode, simulateExecution, quickAnalysis, debugCodeStream, refactorCodeStream } from "./services/geminiService";
+import { debugCode, simulateExecution, quickAnalysis, debugCodeStream } from "./services/geminiService";
 
 const LANGUAGE_CONFIG: Record<string, { color: string; bg: string; border: string }> = {
   javascript: { color: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/20' },
@@ -93,23 +93,27 @@ function CodeBlock({ language, value, variant = 'default', onRun }: { language: 
 }
 
 interface ParsedResponse {
-  type: 'denied' | 'raw' | 'debug' | 'refactor';
+  type: 'denied' | 'raw' | 'debug';
   content?: string;
   issue?: string;
   buggySnippet?: string;
   fixedCode?: string;
   explanation?: string;
-  // Refactor fields
-  suggestions?: string;
-  refactoredCode?: string;
-  rationale?: string;
+}
+
+interface HistoryItem {
+  id: string;
+  timestamp: number;
+  code: string;
+  issue: string;
+  fixedCode: string;
+  language: string;
 }
 
 export default function App() {
   const [code, setCode] = useState("");
   const [result, setResult] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [isRefactoring, setIsRefactoring] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
@@ -123,9 +127,10 @@ export default function App() {
   const [breakpoints, setBreakpoints] = useState<Set<number>>(new Set());
   const [isPaused, setIsPaused] = useState(false);
   const [pausedLine, setPausedLine] = useState<number | null>(null);
-  const [executionResult, setExecutionResult] = useState<{ logs: { id: string; text: string }[]; error: string | null } | null>(null);
+  const [executionResult, setExecutionResult] = useState<{ logs: { id: string; text: string; type: 'log' | 'error' | 'warn' | 'info' | 'debug' | 'input' | 'prompt' }[]; error: string | null } | null>(null);
   const [isPyodideLoading, setIsPyodideLoading] = useState(false);
   const [isCppLoading, setIsCppLoading] = useState(false);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const workerRef = useRef<Worker | null>(null);
   const resumeRef = useRef<(() => void) | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
@@ -134,6 +139,21 @@ export default function App() {
   const cppCompilerRef = useRef<any>(null);
 
   // Detect language when code changes
+  useEffect(() => {
+    const savedHistory = localStorage.getItem('debug_history');
+    if (savedHistory) {
+      try {
+        setHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error("Failed to load history", e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('debug_history', JSON.stringify(history));
+  }, [history]);
+
   useEffect(() => {
     if (!code.trim()) {
       setDetectedLang("javascript");
@@ -151,25 +171,25 @@ export default function App() {
 
   const runCode = async (codeToRun: string, lang: string = 'javascript') => {
     setIsExecuting(true);
-    const logs: { id: string; text: string }[] = [];
+    const logs: { id: string; text: string; type: 'log' | 'error' | 'warn' | 'info' | 'debug' | 'input' | 'prompt' }[] = [];
     const normalizedLang = lang.toLowerCase();
     
-    const addLog = (text: string) => {
-      const newLog = { id: crypto.randomUUID(), text };
+    const addLog = (text: string, type: 'log' | 'error' | 'warn' | 'info' | 'debug' | 'input' | 'prompt' = 'log') => {
+      const newLog = { id: crypto.randomUUID(), text, type };
       logs.push(newLog);
       setExecutionResult(prev => prev ? { ...prev, logs: [...prev.logs, newLog] } : null);
     };
 
-    setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "Initializing execution..." }], error: null });
+    setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "Initializing execution...", type: 'info' }], error: null });
 
     const stdinLines = stdin.split('\n');
     let stdinIndex = 0;
     const getNextStdin = (prompt?: string) => {
       if (prompt) {
-        addLog(`[PROMPT] ${prompt}`);
+        addLog(prompt, 'prompt');
       }
       const val = stdinLines[stdinIndex++] || "";
-      addLog(`[INPUT] ${val}`);
+      addLog(val, 'input');
       return val;
     };
 
@@ -188,17 +208,17 @@ export default function App() {
 
     try {
       if (normalizedLang === 'cpp' || normalizedLang === 'c' || normalizedLang === 'objectivec' || normalizedLang === 'rust' || normalizedLang === 'go') {
-        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "🤖 AI Simulation Mode: Analyzing code behavior..." }], error: null });
+        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "🤖 AI Simulation Mode: Analyzing code behavior...", type: 'info' }], error: null });
         
         const simulationOutput = await simulateExecution(codeToRun, normalizedLang, varsMap, stdin);
         
         setExecutionResult({ 
           logs: [
-            { id: crypto.randomUUID(), text: "✨ AI Simulation Result:" },
-            { id: crypto.randomUUID(), text: "---------------------------" },
-            { id: crypto.randomUUID(), text: simulationOutput },
-            { id: crypto.randomUUID(), text: "---------------------------" },
-            { id: crypto.randomUUID(), text: "Note: This output was predicted by AI analysis." }
+            { id: crypto.randomUUID(), text: "✨ AI Simulation Result:", type: 'info' },
+            { id: crypto.randomUUID(), text: "---------------------------", type: 'info' },
+            { id: crypto.randomUUID(), text: simulationOutput, type: 'log' },
+            { id: crypto.randomUUID(), text: "---------------------------", type: 'info' },
+            { id: crypto.randomUUID(), text: "Note: This output was predicted by AI analysis.", type: 'debug' }
           ], 
           error: null 
         });
@@ -216,7 +236,7 @@ export default function App() {
         }
         
         // Load packages from imports automatically
-        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "Analyzing imports & loading packages..." }], error: null });
+        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "Analyzing imports & loading packages...", type: 'info' }], error: null });
         try {
           await pyodideRef.current.loadPackagesFromImports(codeToRun);
         } catch (e) {
@@ -269,14 +289,23 @@ export default function App() {
 
       // Run JS in a Worker to prevent UI freeze
       await new Promise((resolve, reject) => {
-        // Instrument code for breakpoints
-        const instrumentedLines = finalCode.split('\n').map((line, i) => {
-          const lineNum = i + 1;
-          // Simple check to avoid instrumenting empty lines or comments (basic)
-          if (!line.trim() || line.trim().startsWith('//')) return line;
-          return `await __checkBreakpoint(${lineNum}); ${line}`;
-        });
-        const instrumentedCode = `(async () => {\n${instrumentedLines.join('\n')}\n})()`;
+        // Instrument code for breakpoints ONLY if breakpoints exist
+        let instrumentedCode = "";
+        if (breakpoints.size > 0) {
+          const instrumentedLines = finalCode.split('\n').map((line, i) => {
+            const lineNum = i + 1;
+            // Skip empty lines or comments to reduce overhead
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.endsWith('*/')) return line;
+            
+            // Avoid instrumenting inside multi-line constructs if possible
+            // This is still a heuristic, but better than nothing
+            return `await __checkBreakpoint(${lineNum}); ${line}`;
+          });
+          instrumentedCode = `(async () => {\n${instrumentedLines.join('\n')}\n})()`;
+        } else {
+          instrumentedCode = `(async () => {\n${finalCode}\n})()`;
+        }
 
         const workerCode = `
           self.onmessage = async function(e) {
@@ -363,14 +392,14 @@ export default function App() {
 
         worker.onmessage = (e) => {
           const { type, content, line } = e.data;
-          if (type === 'log') addLog(content.map(String).join(' '));
-          if (type === 'error') addLog(`[ERROR] ${content.map(String).join(' ')}`);
-          if (type === 'warn') addLog(`[WARN] ${content.map(String).join(' ')}`);
-          if (type === 'info') addLog(`[INFO] ${content.map(String).join(' ')}`);
+          if (type === 'log') addLog(content.map(String).join(' '), 'log');
+          if (type === 'error') addLog(content.map(String).join(' '), 'error');
+          if (type === 'warn') addLog(content.map(String).join(' '), 'warn');
+          if (type === 'info') addLog(content.map(String).join(' '), 'info');
           if (type === 'breakpoint') {
             setIsPaused(true);
             setPausedLine(line);
-            addLog(`[DEBUG] Paused at line ${line}`);
+            addLog(`Paused at line ${line}`, 'debug');
           }
           if (type === 'done') {
             clearTimeout(timer);
@@ -388,7 +417,7 @@ export default function App() {
           workerRef.current = null;
           setIsPaused(false);
           setPausedLine(null);
-          addLog("[DEBUG] Execution stopped by user.");
+          addLog("Execution stopped by user.", 'debug');
           resolve(null);
         };
 
@@ -456,24 +485,10 @@ export default function App() {
     const fixedCodeMatch = text.match(/### ✅ Fixed Code([\s\S]*?)(?=### |$)/i);
     const explanationMatch = text.match(/### 🧠 Explanation([\s\S]*?)(?=### |$)/i);
 
-    // Refactor matches
-    const suggestionsMatch = text.match(/### 🚀 Refactoring Suggestions([\s\S]*?)(?=### |$)/i);
-    const refactoredCodeMatch = text.match(/### ✨ Refactored Code([\s\S]*?)(?=### |$)/i);
-    const rationaleMatch = text.match(/### 🧠 Rationale([\s\S]*?)(?=### |$)/i);
-
     if (issueMatch) sections.issue = issueMatch[1].trim();
     if (buggyMatch) sections.buggySnippet = buggyMatch[1].trim();
     if (fixedCodeMatch) sections.fixedCode = fixedCodeMatch[1].trim();
     if (explanationMatch) sections.explanation = explanationMatch[1].trim();
-
-    if (suggestionsMatch || refactoredCodeMatch || rationaleMatch) {
-      return {
-        type: 'refactor',
-        suggestions: suggestionsMatch?.[1].trim(),
-        refactoredCode: refactoredCodeMatch?.[1].trim(),
-        rationale: rationaleMatch?.[1].trim()
-      };
-    }
 
     // Fallback if parsing fails but there is text
     if (!sections.issue && !sections.buggySnippet && !sections.fixedCode && !sections.explanation && text) {
@@ -484,7 +499,7 @@ export default function App() {
   };
 
   const handleQuickAnalysis = async () => {
-    if (!code.trim()) return;
+    if (!code.trim() || cooldown > 0) return;
     setIsLoading(true);
     setProgress(10);
     
@@ -498,7 +513,7 @@ export default function App() {
       setProgress(100);
       setTimeout(() => setProgress(0), 500);
     } catch (error: any) {
-      setError("Quick analysis failed");
+      handleAIError(error);
     } finally {
       setIsLoading(false);
       clearInterval(interval);
@@ -507,13 +522,19 @@ export default function App() {
   const handleDebug = async () => {
     if (!code.trim() || cooldown > 0) return;
     
+    if (code.length > 25000 && !isTurbo) {
+      setError("This code snippet is exceptionally large. 'Turbo Mode' is highly recommended to avoid timeouts.");
+    } else if (code.length > 12000 && !isTurbo) {
+      setError("Code is quite long. Enabling 'Turbo Mode' is recommended for faster analysis.");
+    }
+
     setIsLoading(true);
-    setIsRefactoring(false);
     setError(null);
     setResult("");
     
     try {
-      const stream = debugCodeStream(code);
+      const historyContext = history.slice(-5).map(h => `ISSUE: ${h.issue}\nFIX: ${h.fixedCode}`);
+      const stream = debugCodeStream(code, isTurbo, historyContext);
       let fullResponse = "";
       
       for await (const chunk of stream) {
@@ -522,30 +543,19 @@ export default function App() {
           setResult(fullResponse);
         }
       }
-    } catch (err: any) {
-      handleAIError(err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
-  const handleRefactor = async () => {
-    if (!code.trim() || cooldown > 0) return;
-    
-    setIsLoading(true);
-    setIsRefactoring(true);
-    setError(null);
-    setResult("");
-    
-    try {
-      const stream = refactorCodeStream(code);
-      let fullResponse = "";
-      
-      for await (const chunk of stream) {
-        if (chunk) {
-          fullResponse += chunk;
-          setResult(fullResponse);
-        }
+      // Save to history if successful and contains a fix
+      const parsed = parseAIResponse(fullResponse);
+      if (parsed.type === 'debug' && parsed.issue && parsed.fixedCode) {
+        const newItem: HistoryItem = {
+          id: crypto.randomUUID(),
+          timestamp: Date.now(),
+          code: code,
+          issue: parsed.issue,
+          fixedCode: parsed.fixedCode,
+          language: detectedLang
+        };
+        setHistory(prev => [newItem, ...prev].slice(0, 20)); // Keep last 20
       }
     } catch (err: any) {
       handleAIError(err);
@@ -557,6 +567,10 @@ export default function App() {
   const handleAIError = (err: any) => {
     let message = "An unexpected error occurred. Please try again.";
     
+    if (err.message === "AbortError") {
+      message = "The request was cancelled or timed out.";
+    }
+
     switch (err.message) {
       case "NETWORK_ERROR":
         message = "Network connection lost. Please check your internet and try again.";
@@ -565,8 +579,10 @@ export default function App() {
         message = "The AI request timed out. The code might be too large or the service is slow.";
         break;
       case "QUOTA_EXCEEDED":
-        message = "The AI service is currently at capacity. Please wait for the cooldown to finish.";
-        setCooldown(60);
+        message = isTurbo 
+          ? "The AI service is currently at capacity (Quota Exceeded). Please wait a moment for the system to reset."
+          : "Standard AI quota exceeded. Try enabling 'Turbo Mode' for higher limits or wait for the cooldown.";
+        setCooldown(60); // Increased cooldown to 60s to be safer
         const timer = setInterval(() => {
           setCooldown((prev) => {
             if (prev <= 1) {
@@ -689,7 +705,7 @@ export default function App() {
 
                     <AnimatePresence mode="wait">
                       <motion.div
-                        key={detectedLang}
+                        key={`lang-badge-top-${detectedLang}`}
                         initial={{ opacity: 0, x: -5 }}
                         animate={{ opacity: 1, x: 0 }}
                         exit={{ opacity: 0, x: 5 }}
@@ -703,9 +719,20 @@ export default function App() {
                     </AnimatePresence>
                   </div>
                 </div>
-                <Badge variant="secondary" className="bg-white/5 text-[#8E9299] border-none font-mono text-[10px]">
-                  UTF-8
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setBreakpoints(new Set())}
+                    disabled={breakpoints.size === 0}
+                    className="text-[10px] font-mono uppercase tracking-widest text-white/30 hover:text-red-400 hover:bg-red-400/5 h-7 px-2"
+                  >
+                    Clear Breakpoints
+                  </Button>
+                  <Badge variant="secondary" className="bg-white/5 text-[#8E9299] border-none font-mono text-[10px]">
+                    UTF-8
+                  </Badge>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="p-0">
@@ -760,7 +787,7 @@ export default function App() {
                   <AnimatePresence mode="wait">
                     {code.trim() && (
                       <motion.div
-                        key={detectedLang}
+                        key={`lang-badge-float-${detectedLang}`}
                         initial={{ opacity: 0, y: 10, scale: 0.9 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 10, scale: 0.9 }}
@@ -1007,13 +1034,13 @@ export default function App() {
                     whileTap={{ y: 0, scale: 0.95 }}
                   >
                     <Button 
-                      onClick={handleQuickAnalysis} 
-                      disabled={isLoading || !code.trim()}
+                      onClick={() => setIsTurbo(!isTurbo)} 
                       variant="outline"
-                      className="border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10 hover:text-yellow-400 transition-all"
+                      size="sm"
+                      className={`transition-all ${isTurbo ? 'border-orange-500/50 text-orange-500 bg-orange-500/5' : 'border-white/10 text-white/40'}`}
                     >
-                      <Zap className={`w-4 h-4 mr-2 ${isTurbo ? 'animate-pulse' : ''}`} />
-                      Quick Scan
+                      <Zap className={`w-4 h-4 mr-2 ${isTurbo ? 'fill-orange-500' : ''}`} />
+                      Turbo {isTurbo ? 'ON' : 'OFF'}
                     </Button>
                   </motion.div>
 
@@ -1023,16 +1050,14 @@ export default function App() {
                     whileTap={{ y: 0, scale: 0.95 }}
                   >
                     <Button 
-                      onClick={handleRefactor} 
-                      disabled={isLoading || !code.trim() || cooldown > 0}
-                      className="bg-blue-600 hover:bg-blue-700 text-white border-none shadow-[0_0_15px_rgba(37,99,235,0.3)] transition-all disabled:bg-blue-600/50"
+                      onClick={handleQuickAnalysis} 
+                      disabled={isLoading || !code.trim()}
+                      variant="outline"
+                      size="sm"
+                      className="border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10 hover:text-yellow-400 transition-all"
                     >
-                      {isLoading && isRefactoring ? (
-                        <Sparkles className="w-4 h-4 mr-2 animate-spin" />
-                      ) : (
-                        <Sparkles className="w-4 h-4 mr-2" />
-                      )}
-                      {isLoading && isRefactoring ? "Refactoring..." : "Suggest Refactor"}
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Quick Scan
                     </Button>
                   </motion.div>
 
@@ -1046,12 +1071,12 @@ export default function App() {
                       disabled={isLoading || !code.trim() || cooldown > 0}
                       className="bg-[#FF4444] hover:bg-[#FF4444]/90 text-white border-none shadow-[0_0_15px_rgba(255,68,68,0.3)] transition-all disabled:bg-[#FF4444]/50"
                     >
-                      {isLoading && !isRefactoring ? (
+                      {isLoading ? (
                         <Sparkles className="w-4 h-4 mr-2 animate-spin" />
                       ) : (
                         <Bug className="w-4 h-4 mr-2" />
                       )}
-                      {isLoading && !isRefactoring ? "Analyzing..." : cooldown > 0 ? `Cooldown (${cooldown}s)` : "Execute Debug"}
+                      {isLoading ? "Analyzing..." : cooldown > 0 ? `Cooldown (${cooldown}s)` : "Execute Debug"}
                     </Button>
                   </motion.div>
                 </motion.div>
@@ -1080,6 +1105,15 @@ export default function App() {
                         <Button 
                           variant="ghost" 
                           size="sm" 
+                          onClick={() => setExecutionResult(prev => prev ? { ...prev, logs: [] } : null)}
+                          className="h-5 px-2 text-[9px] text-[#8E9299] hover:text-white hover:bg-white/5"
+                        >
+                          <Trash2 className="w-2.5 h-2.5 mr-1" />
+                          Clear Console
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
                           onClick={() => setExecutionResult(null)}
                           className="h-5 px-2 text-[9px] text-[#8E9299] hover:text-white hover:bg-white/5"
                         >
@@ -1100,7 +1134,7 @@ export default function App() {
                             <span className="text-[9px] font-mono text-white/40 uppercase tracking-widest">Variables:</span>
                             <div className="flex gap-2">
                               {variables.map(v => (
-                                <Badge key={v.id} variant="outline" className="bg-white/5 border-white/10 text-[9px] font-mono text-white/60 lowercase">
+                                <Badge key={`debug-var-${v.id}`} variant="outline" className="bg-white/5 border-white/10 text-[9px] font-mono text-white/60 lowercase">
                                   {v.key}: {v.value}
                                 </Badge>
                               ))}
@@ -1144,14 +1178,30 @@ export default function App() {
                         {executionResult.logs.length === 0 && !executionResult.error && (
                           <p className="text-[#3A3B3F] italic">No output produced.</p>
                         )}
-                        {executionResult.logs.map((log) => (
-                          <div key={log.id} className="text-white/90 flex gap-3">
-                            <span className="text-white/20 select-none w-4 text-right">
-                              {executionResult.logs.indexOf(log) + 1}
-                            </span>
-                            <span className="whitespace-pre-wrap break-all">{log.text}</span>
-                          </div>
-                        ))}
+                        {executionResult.logs.map((log) => {
+                          const typeStyles = {
+                            log: 'text-white/90',
+                            error: 'text-red-400',
+                            warn: 'text-yellow-400',
+                            info: 'text-blue-400',
+                            debug: 'text-purple-400 italic',
+                            input: 'text-green-400 font-bold',
+                            prompt: 'text-cyan-400 font-bold'
+                          };
+                          
+                          return (
+                            <div key={`debug-log-${log.id}`} className={`flex gap-3 ${typeStyles[log.type] || 'text-white/90'}`}>
+                              <span className="text-white/20 select-none w-4 text-right">
+                                {executionResult.logs.indexOf(log) + 1}
+                              </span>
+                              <span className="whitespace-pre-wrap break-all">
+                                {log.type === 'input' && '> '}
+                                {log.type === 'prompt' && '? '}
+                                {log.text}
+                              </span>
+                            </div>
+                          );
+                        })}
                         {executionResult.error && (
                           <div className="text-red-400 bg-red-400/5 p-3 rounded border border-red-400/10 mt-2 flex gap-3">
                             <AlertCircle className="w-4 h-4 shrink-0" />
@@ -1171,28 +1221,68 @@ export default function App() {
 
           {/* Output Section */}
           <div className="space-y-6">
-            <AnimatePresence mode="wait">
-              {!result && !isLoading && !error && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -10 }}
-                >
-                  <Card className="bg-white border-none shadow-xl">
-                    <CardContent className="p-12 flex flex-col items-center text-center space-y-4">
-                      <div className="w-16 h-16 rounded-full bg-[#E6E6E6] flex items-center justify-center">
-                        <Code2 className="w-8 h-8 text-[#8E9299]" />
-                      </div>
-                      <div className="space-y-2">
-                        <h3 className="text-lg font-bold italic font-serif">Awaiting Input</h3>
-                        <p className="text-sm text-[#8E9299] max-w-xs">
-                          Paste your code snippet in the left panel to begin the analysis process.
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              )}
+            <Tabs defaultValue="analysis" className="w-full">
+              <div className="flex items-center justify-between mb-4">
+                <TabsList className="bg-white/50 p-1 rounded-lg inline-flex">
+                  <TabsTrigger value="analysis" className="px-4 py-1.5 text-[10px] font-mono uppercase tracking-widest rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm transition-all">Analysis</TabsTrigger>
+                  <TabsTrigger value="history" className="px-4 py-1.5 text-[10px] font-mono uppercase tracking-widest rounded-md data-[state=active]:bg-white data-[state=active]:shadow-sm transition-all flex items-center gap-2">
+                    Memory 
+                    {history.length > 0 && (
+                      <span className="bg-[#FF4444] text-white text-[8px] px-1.5 py-0.5 rounded-full animate-pulse">
+                        {history.length}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
+                
+                <AnimatePresence>
+                  {history.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: 20 }}
+                    >
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to clear all learned patterns?")) {
+                            setHistory([]);
+                          }
+                        }}
+                        className="h-7 text-[9px] text-[#8E9299] hover:text-red-500 hover:bg-red-50 uppercase tracking-widest font-mono"
+                      >
+                        <Trash2 className="w-3 h-3 mr-1" />
+                        Clear Memory
+                      </Button>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+
+              <TabsContent value="analysis" className="mt-0 focus-visible:outline-none">
+                <AnimatePresence mode="wait">
+                  {!result && !isLoading && !error && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -10 }}
+                    >
+                      <Card className="bg-white border-none shadow-xl">
+                        <CardContent className="p-12 flex flex-col items-center text-center space-y-4">
+                          <div className="w-16 h-16 rounded-full bg-[#E6E6E6] flex items-center justify-center">
+                            <Code2 className="w-8 h-8 text-[#8E9299]" />
+                          </div>
+                          <div className="space-y-2">
+                            <h3 className="text-lg font-bold italic font-serif">Awaiting Input</h3>
+                            <p className="text-sm text-[#8E9299] max-w-xs">
+                              Paste your code snippet in the left panel to begin the analysis process.
+                            </p>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  )}
 
               {isLoading && (
                 <motion.div
@@ -1296,81 +1386,6 @@ export default function App() {
                         </CardContent>
                       </ScrollArea>
                     </Card>
-                  ) : parsedResult.type === 'refactor' ? (
-                    <div className="space-y-4">
-                      {parsedResult.suggestions && (
-                        <Card className="bg-white border-none shadow-lg overflow-hidden border-l-4 border-l-blue-500">
-                          <CardHeader className="bg-[#f8f9fa] py-3 border-b border-black/5">
-                            <div className="flex items-center gap-2">
-                              <Sparkles className="w-4 h-4 text-blue-500" />
-                              <CardTitle className="text-xs font-mono uppercase tracking-widest">Refactoring Suggestions</CardTitle>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="p-5">
-                            <div className="markdown-body">
-                              <ReactMarkdown>{parsedResult.suggestions}</ReactMarkdown>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {parsedResult.refactoredCode && (
-                        <Card className="bg-white border-none shadow-lg overflow-hidden border-l-4 border-l-indigo-500">
-                          <CardHeader className="bg-[#f8f9fa] py-3 border-b border-black/5">
-                            <div className="flex items-center gap-2">
-                              <Code2 className="w-4 h-4 text-indigo-500" />
-                              <CardTitle className="text-xs font-mono uppercase tracking-widest">Refactored Code</CardTitle>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="p-0">
-                            <div className="markdown-body px-5 py-2">
-                              <ReactMarkdown
-                                components={{
-                                  code({ node, className, children, ...props }: any) {
-                                    const match = /language-(\w+)/.exec(className || "");
-                                    const isInline = !match;
-                                    
-                                    if (isInline) {
-                                      return (
-                                        <code className="bg-[#f0f0f0] px-1.5 py-0.5 rounded text-sm font-mono text-[#151619]" {...props}>
-                                          {children}
-                                        </code>
-                                      );
-                                    }
-
-                                    return (
-                                      <CodeBlock
-                                        language={match[1]}
-                                        value={String(children).replace(/\n$/, "")}
-                                        onRun={runCode}
-                                      />
-                                    );
-                                  },
-                                }}
-                              >
-                                {parsedResult.refactoredCode}
-                              </ReactMarkdown>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {parsedResult.rationale && (
-                        <Card className="bg-white border-none shadow-lg overflow-hidden border-l-4 border-l-purple-500">
-                          <CardHeader className="bg-[#f8f9fa] py-3 border-b border-black/5">
-                            <div className="flex items-center gap-2">
-                              <Info className="w-4 h-4 text-purple-500" />
-                              <CardTitle className="text-xs font-mono uppercase tracking-widest">Rationale</CardTitle>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="p-5">
-                            <div className="markdown-body">
-                              <ReactMarkdown>{parsedResult.rationale}</ReactMarkdown>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-                    </div>
                   ) : (
                     <div className="space-y-4">
                       {/* Identified Issue */}
@@ -1516,7 +1531,7 @@ export default function App() {
                                   <p className="text-[#3A3B3F] italic">No output produced.</p>
                                 )}
                                 {executionResult.logs.map((log, i) => (
-                                  <div key={log.id} className="text-white/90 border-l border-white/10 pl-3 py-0.5">
+                                  <div key={`exec-log-${log.id}`} className="text-white/90 border-l border-white/10 pl-3 py-0.5">
                                     <span className="text-white/30 mr-2">{i + 1}</span>
                                     {log.text}
                                   </div>
@@ -1537,8 +1552,80 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
-          </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent value="history" className="mt-0 focus-visible:outline-none">
+            <div className="space-y-4">
+              {history.length === 0 ? (
+                <Card className="bg-white border-none shadow-xl">
+                  <CardContent className="p-12 flex flex-col items-center text-center space-y-4">
+                    <div className="w-16 h-16 rounded-full bg-[#E6E6E6] flex items-center justify-center">
+                      <Sparkles className="w-8 h-8 text-[#8E9299]" />
+                    </div>
+                    <div className="space-y-2">
+                      <h3 className="text-lg font-bold italic font-serif">No Patterns Learned Yet</h3>
+                      <p className="text-sm text-[#8E9299] max-w-xs">
+                        Start debugging code to build a knowledge base of common issues and fixes.
+                      </p>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <ScrollArea className="h-[600px] pr-4">
+                  <div className="space-y-4 pb-4">
+                    {history.map((item) => (
+                      <motion.div
+                        key={item.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                      >
+                        <Card className="bg-white border-none shadow-lg overflow-hidden group">
+                          <CardHeader className="bg-[#151619] text-white py-3 flex flex-row items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className={`w-2 h-2 rounded-full ${LANGUAGE_CONFIG[item.language]?.color.replace('text-', 'bg-') || 'bg-blue-500'}`} />
+                              <CardTitle className="text-[10px] font-mono uppercase tracking-widest">
+                                {item.language} • {new Date(item.timestamp).toLocaleString()}
+                              </CardTitle>
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              onClick={() => setCode(item.code)}
+                              className="h-6 px-2 text-[9px] text-white/50 hover:text-white hover:bg-white/10 uppercase tracking-widest font-mono"
+                            >
+                              Load Code
+                            </Button>
+                          </CardHeader>
+                          <CardContent className="p-4 space-y-4">
+                            <div>
+                              <h4 className="text-[10px] font-mono uppercase tracking-widest text-[#8E9299] mb-1">Identified Issue</h4>
+                              <p className="text-sm text-[#151619] line-clamp-2">{item.issue}</p>
+                            </div>
+                            <Separator className="bg-[#E6E6E6]" />
+                            <div>
+                              <h4 className="text-[10px] font-mono uppercase tracking-widest text-[#8E9299] mb-1">Fixed Pattern</h4>
+                              <div className="rounded border border-[#E6E6E6] overflow-hidden">
+                                <SyntaxHighlighter
+                                  language={item.language}
+                                  style={vscDarkPlus}
+                                  customStyle={{ margin: 0, padding: '12px', fontSize: '11px' }}
+                                >
+                                  {item.fixedCode}
+                                </SyntaxHighlighter>
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      </motion.div>
+                    ))}
+                  </div>
+                </ScrollArea>
+              )}
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </div>
 
         {/* Footer */}
         <footer className="pt-12 pb-8 border-t border-[#151619]/10">
