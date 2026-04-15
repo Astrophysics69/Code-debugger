@@ -291,12 +291,17 @@ export default function App() {
         else if (normalizedLang === 'jsx' || normalizedLang === 'tsx' || codeToRun.includes('React') || codeToRun.includes('useState')) engineName = "React AI Simulation Engine";
         else if (normalizedLang === 'json') engineName = "JSON AI Simulation Engine";
         
-        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: `🤖 ${engineName}: Analyzing code behavior...`, type: 'info' }], error: null });
+        addLog(`🤖 ${engineName}: Analyzing code behavior...`, 'info');
+        if (normalizedLang === 'cpp' || normalizedLang === 'c') {
+          addLog(`$ g++ -fsanitize=address -g main.${normalizedLang === 'cpp' ? 'cpp' : 'c'} -o main`, 'debug');
+          addLog(`$ ./main`, 'debug');
+        }
         
         const simulationOutput = await simulateExecution(codeToRun, normalizedLang, varsMap, stdin);
         
-        setExecutionResult({ 
+        setExecutionResult(prev => ({ 
           logs: [
+            ...(prev?.logs || []),
             { id: crypto.randomUUID(), text: `✨ ${engineName} Result:`, type: 'info' },
             { id: crypto.randomUUID(), text: "---------------------------", type: 'info' },
             { id: crypto.randomUUID(), text: simulationOutput, type: 'log' },
@@ -304,7 +309,7 @@ export default function App() {
             { id: crypto.randomUUID(), text: "Note: This output was predicted by AI analysis.", type: 'debug' }
           ], 
           error: null 
-        });
+        }));
         return;
       }
 

@@ -91,7 +91,7 @@ export async function debugCode(code: string, history?: string[], retryCount = 0
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s timeout
+  const timeoutId = setTimeout(() => controller.abort(), 300000); // 300s timeout (5 mins)
   
   const historyContext = history && history.length > 0 
     ? `\n\nPREVIOUSLY SOLVED PROBLEMS (LEARNING CONTEXT):\n${history.join('\n---\n')}\nUse these to identify recurring patterns or user coding style.`
@@ -108,7 +108,7 @@ export async function debugCode(code: string, history?: string[], retryCount = 0
           thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 120000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 300000))
     ]);
 
     clearTimeout(timeoutId);
@@ -144,12 +144,12 @@ export async function* debugCodeStream(code: string, isTurbo = false, history?: 
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s for stream
+  const timeoutId = setTimeout(() => controller.abort(), 300000); // 300s for stream
   
   const historyContext = history && history.length > 0 
     ? `\n\nPREVIOUSLY SOLVED PROBLEMS (LEARNING CONTEXT):\n${history.join('\n---\n')}\nUse these to identify recurring patterns or user coding style.`
     : '';
-
+ 
   try {
     const response = await Promise.race([
       ai.models.generateContentStream({
@@ -161,7 +161,7 @@ export async function* debugCodeStream(code: string, isTurbo = false, history?: 
           thinkingConfig: isTurbo ? { thinkingLevel: ThinkingLevel.MINIMAL } : { thinkingLevel: ThinkingLevel.LOW }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 120000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 300000))
     ]);
 
     for await (const chunk of response) {
@@ -194,7 +194,7 @@ export async function quickAnalysis(code: string, retryCount = 0): Promise<strin
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s for quick analysis
+  const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for quick analysis
   
   try {
     const response = await Promise.race([
@@ -207,7 +207,7 @@ export async function quickAnalysis(code: string, retryCount = 0): Promise<strin
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 30000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 60000))
     ]);
 
     clearTimeout(timeoutId);
@@ -238,22 +238,24 @@ export async function simulateExecution(code: string, language: string, variable
 
   const ai = new GoogleGenAI({ apiKey });
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 150000); // 150s for simulation
+  const timeoutId = setTimeout(() => controller.abort(), 300000); // 300s for simulation
   
   const variablesContext = variables && Object.keys(variables).length > 0 
     ? `\n\nCONTEXT VARIABLES:\n${Object.entries(variables).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join('\n')}`
     : '';
     
   const stdinContext = stdin ? `\n\nSTANDARD INPUT (stdin):\n${stdin}` : '';
-
+ 
   let languageSpecificInstructions = '';
   const lowerLang = language.toLowerCase();
   
   if (lowerLang === 'cpp' || lowerLang === 'c') {
     languageSpecificInstructions = `
       6. For C/C++, handle pointer arithmetic, memory allocation (malloc/free, new/delete), and standard library containers (std::vector, std::map, etc.) with extreme care.
-      7. Simulate undefined behavior (like out-of-bounds access) as a crash or error message if applicable.
-      8. Ensure standard output formatting (like printf or cout) is exact.`;
+      7. Simulate the behavior of code compiled with AddressSanitizer (ASan) enabled (g++ -fsanitize=address -g). 
+      8. If there are memory leaks, buffer overflows, use-after-free, or other memory errors, report them exactly as ASan would (e.g., "ASAN:SIGSEGV", "heap-use-after-free").
+      9. Simulate undefined behavior (like out-of-bounds access) as a crash or error message if applicable.
+      10. Ensure standard output formatting (like printf or cout) is exact.`;
   } else if (lowerLang === 'javascript' || lowerLang === 'typescript' || lowerLang === 'js' || lowerLang === 'ts') {
     languageSpecificInstructions = `
       6. For JavaScript/TypeScript, simulate the event loop, promises, and async/await behavior accurately.
@@ -279,7 +281,7 @@ export async function simulateExecution(code: string, language: string, variable
       7. If the JSON represents a configuration or a specific data model, explain its structure and potential usage.
       8. Identify any syntax errors or potential schema violations if a schema is implied.`;
   }
-
+ 
   try {
     const response = await Promise.race([
       ai.models.generateContent({
@@ -294,7 +296,7 @@ export async function simulateExecution(code: string, language: string, variable
       4. Provide ONLY the final terminal output (stdout/stderr).
       5. No explanations, no markdown, just raw text output.
       ${languageSpecificInstructions}
-
+ 
       ${variablesContext}
       ${stdinContext}
       
@@ -305,7 +307,7 @@ export async function simulateExecution(code: string, language: string, variable
           thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM }
         },
       }),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 150000))
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("AbortError")), 300000))
     ]);
 
     clearTimeout(timeoutId);
@@ -313,7 +315,7 @@ export async function simulateExecution(code: string, language: string, variable
   } catch (error: any) {
     clearTimeout(timeoutId);
     if (error.name === 'AbortError' || error.message === 'AbortError') {
-      return "Error: AI Simulation timed out (150s). The code might be too complex or the service is slow.";
+      return "Error: AI Simulation timed out (300s). The code might be too complex or the service is slow.";
     }
     const errorString = JSON.stringify(error).toLowerCase();
     const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
