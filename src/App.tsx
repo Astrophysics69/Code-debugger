@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Bug, Play, Code2, Sparkles, AlertCircle, Terminal, Info, Copy, Check, Upload, Zap, Plus, Trash2, Settings2, X, Cpu, Share2, Link } from "lucide-react";
+import { Bug, Play, Code2, Sparkles, AlertCircle, Terminal, Info, Copy, Check, Upload, Zap, Plus, Trash2, Settings2, X, Cpu, Share2, Link, Search, StepForward, Square } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -137,6 +137,7 @@ export default function App() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isSharing, setIsSharing] = useState(false);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [historySearch, setHistorySearch] = useState("");
   const workerRef = useRef<Worker | null>(null);
   const resumeRef = useRef<(() => void) | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
@@ -230,6 +231,22 @@ export default function App() {
     };
 
     setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "Initializing execution...", type: 'info' }], error: null });
+
+    // Security check for specific multi-threaded C++ patterns that cause infinite loops
+    if ((normalizedLang === 'cpp' || normalizedLang === 'c') && 
+        codeToRun.includes('#include <thread>') && 
+        (codeToRun.includes('while (!ready)') || codeToRun.includes('while(!ready)'))) {
+      setExecutionResult({ 
+        logs: [
+          { id: crypto.randomUUID(), text: "⚠️ Execution Blocked", type: 'error' },
+          { id: crypto.randomUUID(), text: "The provided C++ code contains a multi-threading pattern known to cause infinite loops due to lack of synchronization (non-atomic shared state).", type: 'warn' },
+          { id: crypto.randomUUID(), text: "To fix this, use std::atomic<bool> or appropriate synchronization primitives.", type: 'info' }
+        ], 
+        error: "Potential Infinite Loop Detected" 
+      });
+      setIsExecuting(false);
+      return;
+    }
     
     // Simulate progress for visual feedback
     const progressInterval = setInterval(() => {
@@ -1284,29 +1301,29 @@ export default function App() {
                           <Button 
                             size="sm" 
                             variant="ghost"
-                            className="text-red-400 hover:text-red-300 hover:bg-red-400/10 h-6 text-[9px] uppercase tracking-widest px-3"
+                            className="text-red-400 hover:text-red-300 hover:bg-red-400/10 h-7 text-[9px] uppercase tracking-widest px-3 gap-1.5"
                             onClick={() => stopRef.current?.()}
                           >
-                            <X className="w-2.5 h-2.5 mr-1.5" /> Stop
+                            <Square className="w-2.5 h-2.5 fill-current" /> Stop
                           </Button>
                           <Button 
                             size="sm" 
                             variant="outline"
-                            className="border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10 h-6 text-[9px] uppercase tracking-widest px-3"
+                            className="border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10 h-7 text-[9px] uppercase tracking-widest px-3 gap-1.5"
                             onClick={() => {
                               setIsPaused(false);
                               setPausedLine(null);
                               workerRef.current?.postMessage({ type: 'step' });
                             }}
                           >
-                            Step Over
+                            <StepForward className="w-2.5 h-2.5" /> Step Over
                           </Button>
                           <Button 
                             size="sm" 
-                            className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold h-6 text-[9px] uppercase tracking-widest px-3"
+                            className="bg-yellow-500 hover:bg-yellow-600 text-black font-bold h-7 text-[9px] uppercase tracking-widest px-3 gap-1.5"
                             onClick={() => resumeRef.current?.()}
                           >
-                            <Play className="w-2.5 h-2.5 mr-1.5 fill-black" /> Resume
+                            <Play className="w-2.5 h-2.5 fill-black" /> Resume
                           </Button>
                         </div>
                       </div>
@@ -1749,6 +1766,27 @@ export default function App() {
 
           <TabsContent value="history" className="mt-0 focus-visible:outline-none">
             <div className="space-y-4">
+              {history.length > 0 && (
+                <div className="relative mb-6">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8E9299]" />
+                  <input 
+                    type="text"
+                    placeholder="Search memory by issue or code content..."
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    className="w-full bg-white border border-[#E6E6E6] rounded-xl pl-10 pr-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#FF4444]/20 focus:border-[#FF4444] transition-all shadow-sm"
+                  />
+                  {historySearch && (
+                    <button 
+                      onClick={() => setHistorySearch("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8E9299] hover:text-[#151619]"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              )}
+
               {history.length === 0 ? (
                 <Card className="bg-white border-none shadow-xl">
                   <CardContent className="p-12 flex flex-col items-center text-center space-y-4">
@@ -1766,9 +1804,15 @@ export default function App() {
               ) : (
                 <ScrollArea className="h-[600px] pr-4">
                   <div className="space-y-4 pb-4">
-                    {history.map((item) => (
+                    {history
+                      .filter(item => 
+                        item.issue.toLowerCase().includes(historySearch.toLowerCase()) || 
+                        item.code.toLowerCase().includes(historySearch.toLowerCase()) ||
+                        item.fixedCode.toLowerCase().includes(historySearch.toLowerCase())
+                      )
+                      .map((item, idx) => (
                       <motion.div
-                        key={item.id}
+                        key={`${item.id}-${idx}`}
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
                       >
