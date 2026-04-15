@@ -1,0 +1,35 @@
+{
+  "entities": {
+    "Snippet": {
+      "title": "Snippet",
+      "description": "A shared code snippet",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "The source code of the snippet"
+        },
+        "language": {
+          "type": "string",
+          "description": "The programming language of the snippet"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the snippet was created"
+        },
+        "authorId": {
+          "type": "string",
+          "description": "The UID of the user who created the snippet (optional)"
+        }
+      },
+      "required": ["code", "language", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/snippets/{snippetId}": {
+      "schema": "Snippet",
+      "description": "Collection of shared code snippets"
+    }
+  }
+}

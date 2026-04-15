@@ -43,22 +43,38 @@ function setCachedResult(code: string, result: string) {
 }
 
 function handleGenAIError(error: any): never {
-  console.error("Gemini API Error:", error);
+  console.error("Gemini API Error Detail:", error);
   
   const errorString = JSON.stringify(error).toLowerCase();
-  const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted");
-
-  if (error.message?.includes("fetch failed") || !window.navigator.onLine) {
+  const errorMessage = (error.message || "").toLowerCase();
+  
+  // Network issues
+  if (errorMessage.includes("fetch failed") || errorMessage.includes("network") || !window.navigator.onLine) {
     throw new Error("NETWORK_ERROR");
   }
+
+  // Quota / Rate limits
+  const isQuotaError = errorString.includes("429") || errorString.includes("quota") || errorString.includes("resource_exhausted") || errorMessage.includes("rate limit");
   if (isQuotaError) {
     throw new Error("QUOTA_EXCEEDED");
   }
-  if (error.message?.includes("401") || error.message?.includes("403") || error.message === "API_KEY_MISSING") {
+
+  // Authentication / API Key
+  if (errorMessage.includes("401") || errorMessage.includes("unauthorized") || errorMessage.includes("invalid api key") || error.message === "API_KEY_MISSING") {
+    throw new Error("API_KEY_INVALID");
+  }
+  if (errorMessage.includes("403") || errorMessage.includes("permission denied")) {
     throw new Error("AUTH_ERROR");
   }
-  if (error.message?.includes("safety") || error.message?.includes("blocked")) {
+
+  // Safety / Content filtering
+  if (errorMessage.includes("safety") || errorMessage.includes("blocked") || errorMessage.includes("candidate was blocked") || errorString.includes("finishreason: safety")) {
     throw new Error("SAFETY_ERROR");
+  }
+
+  // Model availability
+  if (errorMessage.includes("503") || errorMessage.includes("service unavailable") || errorMessage.includes("overloaded")) {
+    throw new Error("SERVICE_UNAVAILABLE");
   }
   
   throw error;

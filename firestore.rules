@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: snippets
+    // Document ID: auto-generated
+    // Fields:
+    //   - code: string (required, max 100kb)
+    //   - language: string (required, max 50 chars)
+    //   - createdAt: timestamp (required)
+    //   - authorId: string (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isValidSnippet(data) {
+      return data.keys().hasAll(['code', 'language', 'createdAt']) &&
+             data.code is string && data.code.size() < 102400 &&
+             data.language is string && data.language.size() < 50 &&
+             data.createdAt is timestamp &&
+             (!('authorId' in data) || data.authorId is string);
+    }
+
+    match /snippets/{snippetId} {
+      // Anyone can read a snippet if they have the ID
+      allow get: if true;
+      
+      // Anyone can create a snippet (anonymous sharing)
+      // If authenticated, we can optionally link it to their UID
+      allow create: if isValidSnippet(request.resource.data);
+      
+      // Snippets are immutable for now
+      allow update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}

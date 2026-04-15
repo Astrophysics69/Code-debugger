@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Bug, Play, Code2, Sparkles, AlertCircle, Terminal, Info, Copy, Check, Upload, Zap, Plus, Trash2, Settings2, X, Cpu } from "lucide-react";
+import { Bug, Play, Code2, Sparkles, AlertCircle, Terminal, Info, Copy, Check, Upload, Zap, Plus, Trash2, Settings2, X, Cpu, Share2, Link } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { transform } from "sucrase";
 import hljs from 'highlight.js';
 import { debugCode, simulateExecution, quickAnalysis, debugCodeStream } from "./services/geminiService";
+import { saveSnippet, getSnippet } from "./lib/firebase";
 
 const LANGUAGE_CONFIG: Record<string, { color: string; bg: string; border: string }> = {
   javascript: { color: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/20' },
@@ -134,6 +135,8 @@ export default function App() {
   const [isPyodideLoading, setIsPyodideLoading] = useState(false);
   const [isCppLoading, setIsCppLoading] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const resumeRef = useRef<(() => void) | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
@@ -171,6 +174,48 @@ export default function App() {
       console.error("Language detection failed", e);
     }
   }, [code]);
+
+  // Handle shared snippets from URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const snippetId = params.get('s');
+    if (snippetId) {
+      const loadSnippet = async () => {
+        setIsLoading(true);
+        try {
+          const data = await getSnippet(snippetId);
+          if (data) {
+            setCode(data.code);
+            if (data.language) setSelectedLang(data.language);
+          }
+        } catch (e) {
+          console.error("Failed to load shared snippet", e);
+          setError("Failed to load shared snippet. It may have been deleted or the link is invalid.");
+        } finally {
+          setIsLoading(false);
+        }
+      };
+      loadSnippet();
+    }
+  }, []);
+
+  const handleShare = async () => {
+    if (!code.trim()) return;
+    setIsSharing(true);
+    setShareUrl(null);
+    try {
+      const lang = selectedLang === 'auto' ? detectedLang : selectedLang;
+      const id = await saveSnippet(code, lang);
+      const url = `${window.location.origin}${window.location.pathname}?s=${id}`;
+      setShareUrl(url);
+      navigator.clipboard.writeText(url);
+    } catch (e) {
+      console.error("Failed to share snippet", e);
+      setError("Failed to generate share link. Please try again.");
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   const runCode = async (codeToRun: string, lang: string = 'javascript') => {
     setIsExecuting(true);
@@ -584,16 +629,16 @@ export default function App() {
 
     switch (err.message) {
       case "NETWORK_ERROR":
-        message = "Network connection lost. Please check your internet and try again.";
+        message = "🌐 Network connection issue. Please check your internet connection or firewall settings and try again.";
         break;
       case "TIMEOUT_ERROR":
-        message = "The AI request timed out. The code might be too large or the service is slow.";
+        message = "⏱️ Request timed out. The code snippet might be too complex for a quick analysis. Try breaking it into smaller parts.";
         break;
       case "QUOTA_EXCEEDED":
         message = isTurbo 
-          ? "The AI service is currently at capacity (Quota Exceeded). Please wait a moment for the system to reset."
-          : "Standard AI quota exceeded. Try enabling 'Turbo Mode' for higher limits or wait for the cooldown.";
-        setCooldown(60); // Increased cooldown to 60s to be safer
+          ? "🚀 Turbo quota reached. The AI service is temporarily at capacity. Please wait a minute for the system to reset."
+          : "📉 Standard quota exceeded. Enable 'Turbo Mode' for higher limits or wait for the cooldown period to end.";
+        setCooldown(60);
         const timer = setInterval(() => {
           setCooldown((prev) => {
             if (prev <= 1) {
@@ -604,15 +649,23 @@ export default function App() {
           });
         }, 1000);
         break;
+      case "API_KEY_INVALID":
+        message = "🔑 Invalid API Key. Please check your Gemini API key in the settings menu. It may be expired or incorrectly copied.";
+        break;
       case "AUTH_ERROR":
-        message = "Authentication failed. Please ensure your API key is correctly configured.";
+        message = "🚫 Permission Denied. Your API key doesn't have access to the requested model. Check your Google AI Studio project permissions.";
         break;
       case "SAFETY_ERROR":
-        message = "The request was blocked by safety filters. Please ensure your code is appropriate.";
+        message = "🛡️ Content Filtered. The AI blocked this request due to safety concerns. Ensure your code doesn't contain sensitive or prohibited content.";
+        break;
+      case "SERVICE_UNAVAILABLE":
+        message = "🏗️ AI Service Unavailable. The Gemini servers are currently overloaded or undergoing maintenance. Please try again in a few minutes.";
         break;
       case "EMPTY_RESPONSE":
-        message = "The AI returned an empty response. This might be due to an extremely complex or invalid snippet.";
+        message = "❓ Empty Response. The AI was unable to generate a result for this input. Try rephrasing your code or adding more context.";
         break;
+      default:
+        message = `⚠️ An unexpected error occurred: ${err.message || "Unknown Error"}. Please try again later.`;
     }
     
     setError(message);
@@ -984,6 +1037,23 @@ export default function App() {
                     <Button
                       variant="outline"
                       size="sm"
+                      onClick={handleShare}
+                      disabled={isSharing || !code.trim()}
+                      className="text-blue-500 hover:text-blue-600 hover:bg-blue-50 border-blue-200 hover:border-blue-300 transition-all"
+                    >
+                      {isSharing ? <Sparkles className="w-4 h-4 mr-2 animate-spin" /> : <Share2 className="w-4 h-4 mr-2" />}
+                      {shareUrl ? "Link Copied!" : "Share Snippet"}
+                    </Button>
+                  </motion.div>
+
+                  <motion.div 
+                    variants={{ hidden: { opacity: 0, scale: 0.9 }, visible: { opacity: 1, scale: 1 } }}
+                    whileHover={{ y: -4, scale: 1.02 }}
+                    whileTap={{ y: 0, scale: 0.98 }}
+                  >
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => setShowVars(!showVars)}
                       className={`transition-all ${showVars ? 'bg-white/10 text-white border-white/30' : 'text-[#8E9299] hover:text-white hover:bg-white/10 border-white/10'}`}
                     >
@@ -1207,27 +1277,63 @@ export default function App() {
                         {executionResult.logs.length === 0 && !executionResult.error && (
                           <p className="text-[#3A3B3F] italic">No output produced.</p>
                         )}
-                        {executionResult.logs.map((log) => {
-                          const typeStyles = {
-                            log: 'text-white/90',
-                            error: 'text-red-400',
-                            warn: 'text-yellow-400',
-                            info: 'text-blue-400',
-                            debug: 'text-purple-400 italic',
-                            input: 'text-green-400 font-bold',
-                            prompt: 'text-cyan-400 font-bold'
+                        {executionResult.logs.map((log, index) => {
+                          const typeConfigs = {
+                            log: { 
+                              style: 'text-white/90', 
+                              icon: null,
+                              bg: 'hover:bg-white/5'
+                            },
+                            error: { 
+                              style: 'text-red-400', 
+                              icon: <X className="w-3 h-3" />,
+                              bg: 'bg-red-400/5 hover:bg-red-400/10'
+                            },
+                            warn: { 
+                              style: 'text-yellow-400', 
+                              icon: <AlertCircle className="w-3 h-3" />,
+                              bg: 'bg-yellow-400/5 hover:bg-yellow-400/10'
+                            },
+                            info: { 
+                              style: 'text-blue-400', 
+                              icon: <Info className="w-3 h-3" />,
+                              bg: 'bg-blue-400/5 hover:bg-blue-400/10'
+                            },
+                            debug: { 
+                              style: 'text-purple-400 italic', 
+                              icon: <Settings2 className="w-3 h-3" />,
+                              bg: 'hover:bg-purple-400/5'
+                            },
+                            input: { 
+                              style: 'text-green-400 font-bold', 
+                              icon: <Terminal className="w-3 h-3" />,
+                              bg: 'bg-green-400/5 hover:bg-green-400/10'
+                            },
+                            prompt: { 
+                              style: 'text-cyan-400 font-bold', 
+                              icon: <Sparkles className="w-3 h-3" />,
+                              bg: 'bg-cyan-400/5 hover:bg-cyan-400/10'
+                            }
                           };
                           
+                          const config = typeConfigs[log.type] || typeConfigs.log;
+                          
                           return (
-                            <div key={`debug-log-${log.id}`} className={`flex gap-3 ${typeStyles[log.type] || 'text-white/90'}`}>
-                              <span className="text-white/20 select-none w-4 text-right">
-                                {executionResult.logs.indexOf(log) + 1}
+                            <div 
+                              key={`debug-log-${log.id}`} 
+                              className={`flex gap-3 px-4 py-1 transition-colors ${config.bg} ${config.style}`}
+                            >
+                              <span className="text-white/10 select-none w-6 text-right shrink-0">
+                                {index + 1}
                               </span>
-                              <span className="whitespace-pre-wrap break-all">
-                                {log.type === 'input' && '> '}
-                                {log.type === 'prompt' && '? '}
-                                {log.text}
-                              </span>
+                              <div className="flex items-start gap-2 min-w-0">
+                                {config.icon && <span className="mt-0.5 shrink-0 opacity-70">{config.icon}</span>}
+                                <span className="whitespace-pre-wrap break-all">
+                                  {log.type === 'input' && '> '}
+                                  {log.type === 'prompt' && '? '}
+                                  {log.text}
+                                </span>
+                              </div>
                             </div>
                           );
                         })}
