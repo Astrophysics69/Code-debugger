@@ -219,6 +219,7 @@ export default function App() {
 
   const runCode = async (codeToRun: string, lang: string = 'javascript') => {
     setIsExecuting(true);
+    setProgress(0);
     const logs: { id: string; text: string; type: 'log' | 'error' | 'warn' | 'info' | 'debug' | 'input' | 'prompt' }[] = [];
     const normalizedLang = lang.toLowerCase();
     
@@ -229,6 +230,15 @@ export default function App() {
     };
 
     setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "Initializing execution...", type: 'info' }], error: null });
+    
+    // Simulate progress for visual feedback
+    const progressInterval = setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 95) return prev;
+        const increment = Math.random() * 10;
+        return Math.min(prev + increment, 95);
+      });
+    }, 500);
 
     const stdinLines = stdin.split('\n');
     let stdinIndex = 0;
@@ -325,6 +335,9 @@ export default function App() {
         ]);
 
         setExecutionResult(prev => prev ? { ...prev, logs: prev.logs.filter(l => l.text !== "Initializing execution..." && l.text !== "Analyzing imports & loading packages..."), error: null } : null);
+        clearInterval(progressInterval);
+        setProgress(100);
+        setTimeout(() => setProgress(0), 1000);
         return;
       }
 
@@ -332,6 +345,9 @@ export default function App() {
         const parsed = JSON.parse(codeToRun);
         addLog(JSON.stringify(parsed, null, 2));
         setExecutionResult(prev => prev ? { ...prev, logs: prev.logs.filter(l => l.text !== "Initializing execution..."), error: null } : null);
+        clearInterval(progressInterval);
+        setProgress(100);
+        setTimeout(() => setProgress(0), 1000);
         return;
       }
 
@@ -497,12 +513,15 @@ export default function App() {
       } : null);
 
     } catch (err: any) {
+      clearInterval(progressInterval);
+      setProgress(0);
       if (err.message === "QUOTA_EXCEEDED" || err.message === "AUTH_ERROR" || err.message === "SAFETY_ERROR" || err.message === "NETWORK_ERROR" || err.message === "TIMEOUT_ERROR") {
         handleAIError(err);
       }
       setExecutionResult({ logs: logs.filter(l => l.text !== "Initializing execution..." && l.text !== "Analyzing imports & loading packages..."), error: err.message });
     } finally {
       setIsExecuting(false);
+      clearInterval(progressInterval);
     }
   };
 
@@ -1183,6 +1202,27 @@ export default function App() {
 
               {/* Integrated Console Output */}
               <AnimatePresence>
+                {isExecuting && progress > 0 && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 2 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className="px-6 py-2 bg-[#0a0a0a] border-t border-white/10"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">Execution Progress</span>
+                      <span className="text-[10px] font-mono text-green-500">{Math.round(progress)}%</span>
+                    </div>
+                    <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                      <motion.div 
+                        className="h-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${progress}%` }}
+                        transition={{ type: "spring", stiffness: 50, damping: 20 }}
+                      />
+                    </div>
+                  </motion.div>
+                )}
                 {executionResult && (
                   <motion.div
                     initial={{ height: 0, opacity: 0 }}
@@ -1281,58 +1321,76 @@ export default function App() {
                           const typeConfigs = {
                             log: { 
                               style: 'text-white/90', 
-                              icon: null,
-                              bg: 'hover:bg-white/5'
+                              icon: <Terminal className="w-3 h-3" />,
+                              bg: 'hover:bg-white/5',
+                              label: 'LOG'
                             },
                             error: { 
                               style: 'text-red-400', 
                               icon: <X className="w-3 h-3" />,
-                              bg: 'bg-red-400/5 hover:bg-red-400/10'
+                              bg: 'bg-red-400/5 hover:bg-red-400/10',
+                              label: 'ERROR'
                             },
                             warn: { 
                               style: 'text-yellow-400', 
                               icon: <AlertCircle className="w-3 h-3" />,
-                              bg: 'bg-yellow-400/5 hover:bg-yellow-400/10'
+                              bg: 'bg-yellow-400/5 hover:bg-yellow-400/10',
+                              label: 'WARN'
                             },
                             info: { 
                               style: 'text-blue-400', 
                               icon: <Info className="w-3 h-3" />,
-                              bg: 'bg-blue-400/5 hover:bg-blue-400/10'
+                              bg: 'bg-blue-400/5 hover:bg-blue-400/10',
+                              label: 'INFO'
                             },
                             debug: { 
                               style: 'text-purple-400 italic', 
                               icon: <Settings2 className="w-3 h-3" />,
-                              bg: 'hover:bg-purple-400/5'
+                              bg: 'hover:bg-purple-400/5',
+                              label: 'DEBUG'
                             },
                             input: { 
                               style: 'text-green-400 font-bold', 
                               icon: <Terminal className="w-3 h-3" />,
-                              bg: 'bg-green-400/5 hover:bg-green-400/10'
+                              bg: 'bg-green-400/5 hover:bg-green-400/10',
+                              label: 'INPUT'
                             },
                             prompt: { 
                               style: 'text-cyan-400 font-bold', 
                               icon: <Sparkles className="w-3 h-3" />,
-                              bg: 'bg-cyan-400/5 hover:bg-cyan-400/10'
+                              bg: 'bg-cyan-400/5 hover:bg-cyan-400/10',
+                              label: 'AI'
                             }
                           };
                           
                           const config = typeConfigs[log.type] || typeConfigs.log;
+                          const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
                           
                           return (
                             <div 
-                              key={`debug-log-${log.id}`} 
-                              className={`flex gap-3 px-4 py-1 transition-colors ${config.bg} ${config.style}`}
+                              key={`debug-log-${log.id}-${index}`} 
+                              className={`group flex gap-3 px-4 py-1.5 transition-colors border-l-2 border-transparent ${config.bg} ${config.style} ${log.type === 'error' ? 'border-l-red-500' : ''}`}
                             >
-                              <span className="text-white/10 select-none w-6 text-right shrink-0">
-                                {index + 1}
-                              </span>
-                              <div className="flex items-start gap-2 min-w-0">
-                                {config.icon && <span className="mt-0.5 shrink-0 opacity-70">{config.icon}</span>}
-                                <span className="whitespace-pre-wrap break-all">
-                                  {log.type === 'input' && '> '}
-                                  {log.type === 'prompt' && '? '}
-                                  {log.text}
-                                </span>
+                              <div className="flex flex-col items-end shrink-0 w-12 select-none opacity-20 group-hover:opacity-40 transition-opacity">
+                                <span className="text-[8px] leading-none mb-1">{time}</span>
+                                <span className="text-[9px] font-bold leading-none">{index + 1}</span>
+                              </div>
+                              
+                              <div className="flex items-start gap-3 min-w-0 flex-1">
+                                <div className={`mt-0.5 shrink-0 p-1 rounded bg-white/5 border border-white/10 opacity-70`}>
+                                  {config.icon}
+                                </div>
+                                <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[8px] font-bold uppercase tracking-tighter opacity-40">{config.label}</span>
+                                    {log.type === 'input' && <Badge variant="outline" className="text-[8px] h-3 px-1 border-green-500/30 text-green-500 bg-green-500/5">USER</Badge>}
+                                  </div>
+                                  <span className="whitespace-pre-wrap break-all leading-relaxed">
+                                    {log.type === 'input' && '> '}
+                                    {log.type === 'prompt' && '? '}
+                                    {log.text}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           );
@@ -1666,7 +1724,7 @@ export default function App() {
                                   <p className="text-[#3A3B3F] italic">No output produced.</p>
                                 )}
                                 {executionResult.logs.map((log, i) => (
-                                  <div key={`exec-log-${log.id}`} className="text-white/90 border-l border-white/10 pl-3 py-0.5">
+                                  <div key={`exec-log-${log.id}-${i}`} className="text-white/90 border-l border-white/10 pl-3 py-0.5">
                                     <span className="text-white/30 mr-2">{i + 1}</span>
                                     {log.text}
                                   </div>
