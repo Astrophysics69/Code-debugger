@@ -5,7 +5,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Bug, Play, Code2, Sparkles, AlertCircle, Terminal, Info, Copy, Check, Upload, Zap, Plus, Trash2, Settings2, X } from "lucide-react";
+import { Bug, Play, Code2, Sparkles, AlertCircle, Terminal, Info, Copy, Check, Upload, Zap, Plus, Trash2, Settings2, X, Cpu } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
@@ -23,6 +23,8 @@ import { debugCode, simulateExecution, quickAnalysis, debugCodeStream } from "./
 const LANGUAGE_CONFIG: Record<string, { color: string; bg: string; border: string }> = {
   javascript: { color: 'text-yellow-400', bg: 'bg-yellow-400/10', border: 'border-yellow-400/20' },
   typescript: { color: 'text-blue-400', bg: 'bg-blue-400/10', border: 'border-blue-400/20' },
+  jsx: { color: 'text-cyan-400', bg: 'bg-cyan-400/10', border: 'border-cyan-400/20' },
+  tsx: { color: 'text-blue-500', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
   python: { color: 'text-blue-500', bg: 'bg-blue-500/10', border: 'border-blue-500/20' },
   cpp: { color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20' },
   c: { color: 'text-gray-400', bg: 'bg-gray-400/10', border: 'border-gray-400/20' },
@@ -118,6 +120,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [cooldown, setCooldown] = useState(0);
   const [isTurbo, setIsTurbo] = useState(true);
+  const [isSimulationMode, setIsSimulationMode] = useState(false);
   const [progress, setProgress] = useState(0);
   const [detectedLang, setDetectedLang] = useState("javascript");
   const [selectedLang, setSelectedLang] = useState("auto");
@@ -207,14 +210,22 @@ export default function App() {
     });
 
     try {
-      if (normalizedLang === 'cpp' || normalizedLang === 'c' || normalizedLang === 'objectivec' || normalizedLang === 'rust' || normalizedLang === 'go') {
-        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: "🤖 AI Simulation Mode: Analyzing code behavior...", type: 'info' }], error: null });
+      if (isSimulationMode || normalizedLang === 'cpp' || normalizedLang === 'c' || normalizedLang === 'objectivec' || normalizedLang === 'rust' || normalizedLang === 'go' || (normalizedLang === 'json' && isSimulationMode)) {
+        let engineName = "AI Simulation Mode";
+        if (normalizedLang === 'cpp') engineName = "C++ AI Simulation Engine";
+        else if (normalizedLang === 'javascript' || normalizedLang === 'js') engineName = "JS AI Simulation Engine";
+        else if (normalizedLang === 'typescript' || normalizedLang === 'ts') engineName = "TS AI Simulation Engine";
+        else if (normalizedLang === 'python' || normalizedLang === 'py' || normalizedLang === 'python3') engineName = "Python 3 AI Simulation Engine";
+        else if (normalizedLang === 'jsx' || normalizedLang === 'tsx' || codeToRun.includes('React') || codeToRun.includes('useState')) engineName = "React AI Simulation Engine";
+        else if (normalizedLang === 'json') engineName = "JSON AI Simulation Engine";
+        
+        setExecutionResult({ logs: [{ id: crypto.randomUUID(), text: `🤖 ${engineName}: Analyzing code behavior...`, type: 'info' }], error: null });
         
         const simulationOutput = await simulateExecution(codeToRun, normalizedLang, varsMap, stdin);
         
         setExecutionResult({ 
           logs: [
-            { id: crypto.randomUUID(), text: "✨ AI Simulation Result:", type: 'info' },
+            { id: crypto.randomUUID(), text: `✨ ${engineName} Result:`, type: 'info' },
             { id: crypto.randomUUID(), text: "---------------------------", type: 'info' },
             { id: crypto.randomUUID(), text: simulationOutput, type: 'log' },
             { id: crypto.randomUUID(), text: "---------------------------", type: 'info' },
@@ -629,11 +640,17 @@ export default function App() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2 justify-end">
-            <Badge variant="outline" className={`font-mono text-[10px] ${pyodideRef.current ? 'border-green-500 text-green-500' : 'border-[#151619] text-[#151619]'}`}>
-              PYTHON 3: {pyodideRef.current ? 'READY' : isPyodideLoading ? 'LOADING...' : 'STANDBY'}
+            <Badge variant="outline" className={`font-mono text-[10px] ${isSimulationMode ? 'border-green-500 text-green-500' : pyodideRef.current ? 'border-green-500 text-green-500' : 'border-[#151619] text-[#151619]'}`}>
+              PYTHON 3: {isSimulationMode ? 'AI SIMULATION' : pyodideRef.current ? 'READY' : isPyodideLoading ? 'LOADING...' : 'STANDBY'}
             </Badge>
-            <Badge variant="outline" className={`font-mono text-[10px] ${cppCompilerRef.current ? 'border-blue-500 text-blue-500' : 'border-[#151619] text-[#151619]'}`}>
+            <Badge variant="outline" className={`font-mono text-[10px] ${isSimulationMode ? 'border-yellow-500 text-yellow-500' : 'border-[#151619] text-[#151619]'}`}>
+              JS/TS/REACT: {isSimulationMode ? 'AI SIMULATION' : 'LOCAL WORKER'}
+            </Badge>
+            <Badge variant="outline" className="border-blue-500 text-blue-500 font-mono text-[10px]">
               C/C++: AI SIMULATION
+            </Badge>
+            <Badge variant="outline" className={`font-mono text-[10px] ${isSimulationMode ? 'border-orange-500 text-orange-500' : 'border-[#151619] text-[#151619]'}`}>
+              JSON: {isSimulationMode ? 'AI SIMULATION' : 'PARSER'}
             </Badge>
             <Badge variant="outline" className="border-[#151619] text-[#151619] font-mono px-3 py-1">
               SYSTEM READY
@@ -646,6 +663,16 @@ export default function App() {
                 className={`w-8 h-4 rounded-full transition-colors relative ${isTurbo ? 'bg-yellow-500' : 'bg-white/10'}`}
               >
                 <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isTurbo ? 'left-4.5' : 'left-0.5'}`} />
+              </button>
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10">
+              <Cpu className={`w-3 h-3 ${isSimulationMode ? 'text-blue-400 fill-blue-400' : 'text-[#3A3B3F]'}`} />
+              <span className="text-[10px] font-mono text-white/50 uppercase tracking-widest">AI Sim</span>
+              <button 
+                onClick={() => setIsSimulationMode(!isSimulationMode)}
+                className={`w-8 h-4 rounded-full transition-colors relative ${isSimulationMode ? 'bg-blue-500' : 'bg-white/10'}`}
+              >
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${isSimulationMode ? 'left-4.5' : 'left-0.5'}`} />
               </button>
             </div>
           </div>
@@ -684,6 +711,8 @@ export default function App() {
                       <option value="auto" className="bg-[#151619]">Auto-Detect</option>
                       <option value="javascript" className="bg-[#151619]">JavaScript</option>
                       <option value="typescript" className="bg-[#151619]">TypeScript</option>
+                      <option value="jsx" className="bg-[#151619]">React (JSX)</option>
+                      <option value="tsx" className="bg-[#151619]">React (TSX)</option>
                       <option value="python" className="bg-[#151619]">Python 3</option>
                       <option value="cpp" className="bg-[#151619]">C++</option>
                       <option value="c" className="bg-[#151619]">C</option>

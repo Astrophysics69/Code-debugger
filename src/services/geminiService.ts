@@ -230,6 +230,40 @@ export async function simulateExecution(code: string, language: string, variable
     
   const stdinContext = stdin ? `\n\nSTANDARD INPUT (stdin):\n${stdin}` : '';
 
+  let languageSpecificInstructions = '';
+  const lowerLang = language.toLowerCase();
+  
+  if (lowerLang === 'cpp' || lowerLang === 'c') {
+    languageSpecificInstructions = `
+      6. For C/C++, handle pointer arithmetic, memory allocation (malloc/free, new/delete), and standard library containers (std::vector, std::map, etc.) with extreme care.
+      7. Simulate undefined behavior (like out-of-bounds access) as a crash or error message if applicable.
+      8. Ensure standard output formatting (like printf or cout) is exact.`;
+  } else if (lowerLang === 'javascript' || lowerLang === 'typescript' || lowerLang === 'js' || lowerLang === 'ts') {
+    languageSpecificInstructions = `
+      6. For JavaScript/TypeScript, simulate the event loop, promises, and async/await behavior accurately.
+      7. Handle prototype chain, closures, and 'this' context correctly.
+      8. If DOM APIs are used, simulate their basic behavior (e.g., document.querySelector returning a mock element).
+      9. Support modern ESNext features and common Node.js globals if applicable.`;
+  } else if (lowerLang === 'python' || lowerLang === 'py' || lowerLang === 'python3') {
+    languageSpecificInstructions = `
+      6. For Python, simulate indentation-based scoping, list comprehensions, and generators accurately.
+      7. Handle Python-specific data structures like dictionaries, sets, and tuples correctly.
+      8. Simulate common library behaviors (e.g., math, datetime, collections) if they are imported.
+      9. Respect Python 3.x syntax and standard library expectations.`;
+  } else if (lowerLang === 'react' || lowerLang === 'jsx' || lowerLang === 'tsx') {
+    languageSpecificInstructions = `
+      6. For React, simulate the component lifecycle, hooks (useState, useEffect, useMemo, etc.), and state updates accurately.
+      7. Handle JSX/TSX rendering logic, props passing, and conditional rendering.
+      8. Simulate the Virtual DOM behavior and how state changes trigger re-renders.
+      9. If event handlers are present, simulate their execution and subsequent state transitions.
+      10. Provide a textual representation of the rendered UI structure if applicable, alongside console logs.`;
+  } else if (lowerLang === 'json') {
+    languageSpecificInstructions = `
+      6. For JSON, validate the structure and provide a pretty-printed version of the data.
+      7. If the JSON represents a configuration or a specific data model, explain its structure and potential usage.
+      8. Identify any syntax errors or potential schema violations if a schema is implied.`;
+  }
+
   try {
     const response = await Promise.race([
       ai.models.generateContent({
@@ -243,6 +277,7 @@ export async function simulateExecution(code: string, language: string, variable
       3. Respect the provided Standard Input (stdin) for all input operations.
       4. Provide ONLY the final terminal output (stdout/stderr).
       5. No explanations, no markdown, just raw text output.
+      ${languageSpecificInstructions}
 
       ${variablesContext}
       ${stdinContext}
